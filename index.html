@@ -101,6 +101,7 @@
       <div class="sub">Norges Bank daily spot rates</div>
     </div>
     <div class="hbtns">
+      <button class="btn" id="copyBtn" title="Copy latest rates" aria-label="Copy latest rates">⧉</button>
       <button class="btn" id="themeBtn" title="Toggle light/dark" aria-label="Toggle theme">☾</button>
       <button class="btn" id="refresh">Refresh</button>
     </div>
@@ -143,6 +144,17 @@
   </div>
 
   <div class="card">
+    <h2>Realised volatility (annualised)</h2>
+    <div class="returns" style="grid-template-columns:repeat(3,1fr)">
+      <div class="ret"><div class="k">30-day</div><div class="v" id="vol30">—</div></div>
+      <div class="ret"><div class="k">60-day</div><div class="v" id="vol60">—</div></div>
+      <div class="ret"><div class="k">90-day</div><div class="v" id="vol90">—</div></div>
+    </div>
+    <canvas id="volspark" height="48" style="display:block;width:100%;height:48px;margin-top:12px"></canvas>
+    <div class="legend"><span><i style="background:var(--accent)"></i>Rolling 30-day volatility</span></div>
+  </div>
+
+  <div class="card">
     <h2>Alert</h2>
     <div class="alertrow">
       <label>Notify when rate is</label>
@@ -177,8 +189,8 @@
   <div class="card">
     <h2>Recent fixings</h2>
     <table>
-      <thead><tr><th>Date</th><th>Rate</th><th>Δ vs prev</th></tr></thead>
-      <tbody id="tbody"><tr><td colspan="3" class="loading">Loading…</td></tr></tbody>
+      <thead><tr><th>Date</th><th>Wk</th><th>Rate</th><th>Δ vs prev</th></tr></thead>
+      <tbody id="tbody"><tr><td colspan="4" class="loading">Loading…</td></tr></tbody>
     </table>
   </div>
 
@@ -266,7 +278,7 @@
     document.getElementById("themeBtn").textContent=light?"☀":"☾";
     var mc=document.getElementById("themeColor"); if(mc) mc.setAttribute("content",light?"#f4f7fc":"#0b1f3a");
     safeSet(THEME_KEY,light?"light":"dark");
-    if(rawSeries(active).length) drawChart();
+    if(rawSeries(active).length){ drawChart(); drawVolSpark(displaySeries(active)); }
   }
   function initTheme(){
     var saved=safeGet(THEME_KEY), light;
@@ -364,6 +376,54 @@
     var u=unitOf(code);
     return {level:u/a.level, dir:a.dir==="above"?"below":"above"};
   }
+  function isoWeek(iso){
+    var p=iso.split("-"), d=new Date(Date.UTC(+p[0],+p[1]-1,+p[2]));
+    var day=(d.getUTCDay()+6)%7; d.setUTCDate(d.getUTCDate()-day+3);
+    var firstThu=new Date(Date.UTC(d.getUTCFullYear(),0,4));
+    var ft=(firstThu.getUTCDay()+6)%7;
+    return 1+Math.round(((d-firstThu)/86400000-3+ft)/7);
+  }
+  function rollingVol(series,w){
+    var out=[]; for(var i=w;i<series.length;i++){ out.push({date:series[i].date,vol:annualVol(series.slice(i-w,i+1))}); }
+    return out;
+  }
+  function setVolWindows(series){
+    [["vol30",30],["vol60",60],["vol90",90]].forEach(function(c){
+      var el=document.getElementById(c[0]); if(!el) return;
+      if(series.length<c[1]+1){ el.textContent="—"; return; }
+      var v=annualVol(series.slice(-(c[1]+1))); el.textContent=(v==null?"—":v.toFixed(1)+"%");
+    });
+  }
+  function drawVolSpark(series){
+    var cv=document.getElementById("volspark"); if(!cv) return;
+    var dpr=window.devicePixelRatio||1, W=cv.clientWidth, H=48;
+    cv.width=W*dpr; cv.height=H*dpr; var ctx=cv.getContext("2d"); ctx.setTransform(dpr,0,0,dpr,0,0); ctx.clearRect(0,0,W,H);
+    var rv=rollingVol(series,30); if(rv.length<2) return;
+    var vals=rv.map(function(d){return d.vol;}), mn=Math.min.apply(null,vals), mx=Math.max.apply(null,vals), rng=(mx-mn)||1; mn-=rng*0.12; mx+=rng*0.12;
+    var pad=4, plotW=W-pad*2, plotH=H-pad*2, n=rv.length, acc=cssVar("--series");
+    ctx.beginPath();
+    for(var i=0;i<n;i++){ var x=pad+(i/(n-1))*plotW, y=pad+(1-(vals[i]-mn)/(mx-mn))*plotH; if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y); }
+    ctx.strokeStyle=acc; ctx.lineWidth=1.5; ctx.lineJoin="round"; ctx.stroke();
+    var lx=pad+plotW, ly=pad+(1-(vals[n-1]-mn)/(mx-mn))*plotH;
+    ctx.beginPath(); ctx.arc(lx,ly,3,0,Math.PI*2); ctx.fillStyle=acc; ctx.fill();
+  }
+  function latestText(){
+    var u=store["USD"]||[], date=u.length?u[u.length-1].date:null, lines=[];
+    lines.push("Norges Bank FX"+(date?" — as of "+prettyDate(date):""));
+    PAIRS.forEach(function(p){ var s=store[p.code]||[]; if(s.length) lines.push(p.code+"/NOK"+(p.unitQty>1?" (per "+p.unitQty+")":"")+"\t"+fmt(s[s.length-1].value)); });
+    CROSSES.forEach(function(c){ var s=rawSeries(c.code); if(s.length) lines.push(c.code+"\t"+fmt(s[s.length-1].value)); });
+    return lines.join("\n");
+  }
+  function copyFallback(txt){
+    var ta=document.createElement("textarea"); ta.value=txt; ta.style.position="fixed"; ta.style.opacity="0";
+    document.body.appendChild(ta); ta.focus(); ta.select(); try{document.execCommand("copy");}catch(e){} document.body.removeChild(ta);
+  }
+  function copyRates(btn){
+    var txt=latestText();
+    function done(){ btn.textContent="✓"; setTimeout(function(){btn.textContent="⧉";},1500); }
+    if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(txt).then(done).catch(function(){copyFallback(txt);done();}); }
+    else { copyFallback(txt); done(); }
+  }
 
   function render(){
     var series=displaySeries(active); if(!series.length) return;
@@ -397,6 +457,7 @@
     var pchg=((last.value-series[0].value)/series[0].value)*100, pe=document.getElementById("periodChg");
     pe.textContent=(pchg>=0?"+":"−")+Math.abs(pchg).toFixed(2)+"%"; pe.className="v "+(pchg>=0?"delta-up":"delta-down");
     var vol=annualVol(series); document.getElementById("vol").textContent=(vol==null?"—":vol.toFixed(1)+"%");
+    setVolWindows(series); drawVolSpark(series);
 
     syncAlertUI(last.value);
     drawChart(); renderTable(); renderMonthly();
@@ -553,7 +614,7 @@
       var d=rows[i],idx=series.indexOf(d),prev=idx>0?series[idx-1]:null;
       var tr=document.createElement("tr"),deltaCell="—",cls="";
       if(prev){var diff=d.value-prev.value; cls=diff>=0?"delta-up":"delta-down"; deltaCell=(diff>=0?"+":"−")+fmt(Math.abs(diff));}
-      tr.innerHTML="<td>"+prettyDate(d.date)+"</td><td>"+fmt(d.value)+"</td><td class='"+cls+"'>"+deltaCell+"</td>";
+      tr.innerHTML="<td>"+prettyDate(d.date)+"</td><td>W"+isoWeek(d.date)+"</td><td>"+fmt(d.value)+"</td><td class='"+cls+"'>"+deltaCell+"</td>";
       tb.appendChild(tr);
     }
   }
@@ -613,6 +674,7 @@
   });
   document.getElementById("csvBtn").addEventListener("click",exportCSV);
   document.getElementById("refresh").addEventListener("click",load);
+  document.getElementById("copyBtn").addEventListener("click",function(){ copyRates(this); });
   document.getElementById("themeBtn").addEventListener("click",function(){ applyTheme(!document.body.classList.contains("light")); });
   document.getElementById("alertLevel").addEventListener("input",onAlertChange);
   document.getElementById("alertDir").addEventListener("change",onAlertChange);
@@ -624,7 +686,7 @@
   cv.addEventListener("pointerdown",function(e){ if(overlayMode) return; var idx=pointToIdx(e.clientX); if(idx!=null) drawChart(idx); });
   cv.addEventListener("pointerleave",hideTip);
   cv.addEventListener("pointerup",hideTip);
-  window.addEventListener("resize",function(){ if(rawSeries(active).length) drawChart(); });
+  window.addEventListener("resize",function(){ if(rawSeries(active).length){ drawChart(); drawVolSpark(displaySeries(active)); } });
 
   initTheme(); buildTabs(); load();
 })();
