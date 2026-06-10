@@ -1,0 +1,2 @@
+# Wulf1
+USDNOK 2
