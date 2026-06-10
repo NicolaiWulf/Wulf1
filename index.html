@@ -5,9 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="USD/NOK">
+<meta name="apple-mobile-web-app-title" content="NOK FX">
 <meta name="theme-color" content="#0b1f3a">
-<title>USD/NOK — Norges Bank daily rate</title>
+<title>NOK FX — Norges Bank daily rates</title>
 <style>
   :root{
     --bg:#0b1f3a; --bg2:#10294b; --card:#13315c; --line:#1f4373;
@@ -22,11 +22,15 @@
     padding:max(16px,env(safe-area-inset-top)) 16px calc(24px + env(safe-area-inset-bottom));
     max-width:680px;margin:0 auto;
   }
-  header{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:14px}
-  h1{font-size:22px;margin:0;letter-spacing:.3px}
+  header{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:12px}
+  h1{font-size:20px;margin:0;letter-spacing:.3px}
   .sub{color:var(--muted);font-size:13px}
   .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px;margin-bottom:14px;box-shadow:0 6px 20px rgba(0,0,0,.25)}
-  .rate{font-size:46px;font-weight:700;letter-spacing:.5px;margin:2px 0}
+  .tabs{display:flex;gap:6px;margin-bottom:14px}
+  .tabs button{flex:1;background:var(--bg2);color:var(--muted);border:1px solid var(--line);border-radius:12px;padding:11px 0;font-size:15px;font-weight:700;cursor:pointer}
+  .tabs button.active{background:var(--accent);color:#04244a;border-color:var(--accent)}
+  .rate{font-size:44px;font-weight:700;letter-spacing:.5px;margin:2px 0}
+  .unit{color:var(--muted);font-size:13px;text-transform:uppercase;letter-spacing:.6px}
   .ratemeta{display:flex;align-items:center;gap:10px;flex-wrap:wrap;color:var(--muted);font-size:14px}
   .chip{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;font-weight:600;font-size:14px}
   .chip.up{background:rgba(55,211,155,.15);color:var(--up)}
@@ -45,7 +49,6 @@
   thead th{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--line)}
   tbody tr:not(:last-child) td{border-bottom:1px solid rgba(31,67,115,.5)}
   .delta-up{color:var(--up)} .delta-down{color:var(--down)}
-  .row{display:flex;align-items:center;justify-content:space-between;gap:12px}
   .btn{background:var(--bg2);color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:9px 14px;font-size:14px;font-weight:600;cursor:pointer}
   .btn:active{transform:scale(.97)}
   .foot{color:var(--muted);font-size:12px;line-height:1.5;margin-top:6px}
@@ -58,18 +61,21 @@
 <body>
   <header>
     <div>
-      <h1>USD / NOK</h1>
-      <div class="sub">Norges Bank daily spot rate</div>
+      <h1>NOK Exchange Rates</h1>
+      <div class="sub">Norges Bank daily spot rates</div>
     </div>
     <button class="btn" id="refresh">Refresh</button>
   </header>
 
+  <div class="tabs" id="tabs"></div>
+
   <div class="card" id="heroCard">
-    <div class="loading" id="heroLoading">Loading latest rate…</div>
+    <div class="loading" id="heroLoading">Loading latest rates…</div>
     <div id="hero" hidden>
       <div class="ratemeta"><span id="asOf"></span></div>
       <div class="rate" id="rate">—</div>
-      <div class="ratemeta">
+      <div class="unit" id="unit"></div>
+      <div class="ratemeta" style="margin-top:8px">
         <span class="chip" id="changeChip"></span>
         <span id="changeNote"></span>
       </div>
@@ -102,209 +108,210 @@
   </div>
 
   <div class="foot">
-    Source: <a href="https://www.norges-bank.no/en/topics/Statistics/exchange_rates/" target="_blank" rel="noopener">Norges Bank</a> open data API (EXR&nbsp;B.USD.NOK.SP).
-    Rates are indicative middle rates published each business day around 16:00&nbsp;CET — not binding.
+    Source: <a href="https://www.norges-bank.no/en/topics/Statistics/exchange_rates/" target="_blank" rel="noopener">Norges Bank</a> open data API (EXR&nbsp;B.&lt;CUR&gt;.NOK.SP).
+    Indicative middle rates published each business day around 16:00&nbsp;CET — not binding.
+    SEK is quoted per 100 units; USD, EUR and GBP per 1 unit.
     <span id="updated"></span>
   </div>
 
 <script>
 (function(){
   "use strict";
-  var API = "https://data.norges-bank.no/api/data/EXR/B.USD.NOK.SP";
-  var series = [];        // [{date:"YYYY-MM-DD", value:Number}]
+  var API = "https://data.norges-bank.no/api/data/EXR/B.USD+EUR+GBP+SEK.NOK.SP";
+  // Norges Bank quotation: USD/EUR/GBP per 1 unit, SEK per 100 units.
+  var PAIRS = [
+    {code:"USD", label:"USD", unitQty:1},
+    {code:"EUR", label:"EUR", unitQty:1},
+    {code:"GBP", label:"GBP", unitQty:1},
+    {code:"SEK", label:"SEK", unitQty:100}
+  ];
+  var store = {};          // store[code] = [{date, value}]
+  var active = "USD";
   var currentRange = 365;
 
   function fmt(n, d){ d = d==null?4:d; return n.toLocaleString("en-GB",{minimumFractionDigits:d,maximumFractionDigits:d}); }
   function pad(n){ return n<10? "0"+n : ""+n; }
-  function isoDaysAgo(days){
-    var t = new Date(); t.setDate(t.getDate()-days);
-    return t.getFullYear()+"-"+pad(t.getMonth()+1)+"-"+pad(t.getDate());
-  }
-  function isoToday(){
-    var t = new Date();
-    return t.getFullYear()+"-"+pad(t.getMonth()+1)+"-"+pad(t.getDate());
-  }
+  function isoDaysAgo(days){ var t=new Date(); t.setDate(t.getDate()-days); return t.getFullYear()+"-"+pad(t.getMonth()+1)+"-"+pad(t.getDate()); }
+  function isoToday(){ var t=new Date(); return t.getFullYear()+"-"+pad(t.getMonth()+1)+"-"+pad(t.getDate()); }
   function prettyDate(iso){
-    var p = iso.split("-");
-    var months=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-    return parseInt(p[2],10)+" "+months[parseInt(p[1],10)-1]+" "+p[0];
+    var p=iso.split("-"); var m=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    return parseInt(p[2],10)+" "+m[parseInt(p[1],10)-1]+" "+p[0];
+  }
+  function unitLabel(code){
+    var p=null; for(var i=0;i<PAIRS.length;i++) if(PAIRS[i].code===code) p=PAIRS[i];
+    return "NOK per " + (p&&p.unitQty>1 ? p.unitQty+" " : "1 ") + code;
   }
 
   function parseCSV(text){
     var lines = text.replace(/\r/g,"").split("\n").filter(function(l){return l.trim()!=="";});
-    if(lines.length<2) return [];
+    if(lines.length<2) return {};
     var delim = lines[0].indexOf(";")>-1 ? ";" : ",";
     var head = lines[0].split(delim);
-    var iDate=-1, iVal=-1;
+    var iBase=-1,iDate=-1,iVal=-1;
     for(var c=0;c<head.length;c++){
-      var h = head[c].replace(/"/g,"").trim().toUpperCase();
+      var h=head[c].replace(/"/g,"").trim().toUpperCase();
+      if(h==="BASE_CUR") iBase=c;
       if(h==="TIME_PERIOD") iDate=c;
       if(h==="OBS_VALUE") iVal=c;
     }
-    if(iDate<0||iVal<0) return [];
-    var out=[];
+    if(iBase<0||iDate<0||iVal<0) return {};
+    var grouped={};
     for(var r=1;r<lines.length;r++){
-      var cells = lines[r].split(delim);
-      var date = (cells[iDate]||"").replace(/"/g,"").trim();
-      var raw  = (cells[iVal]||"").replace(/"/g,"").trim();
-      if(delim===";") raw = raw.replace(",", ".");
-      var v = parseFloat(raw);
-      if(date && !isNaN(v)) out.push({date:date, value:v});
+      var cells=lines[r].split(delim);
+      var base=(cells[iBase]||"").replace(/"/g,"").trim().toUpperCase();
+      var date=(cells[iDate]||"").replace(/"/g,"").trim();
+      var raw =(cells[iVal]||"").replace(/"/g,"").trim();
+      if(delim===";") raw=raw.replace(",", ".");
+      var v=parseFloat(raw);
+      if(base&&date&&!isNaN(v)){ (grouped[base]=grouped[base]||[]).push({date:date,value:v}); }
     }
-    out.sort(function(a,b){ return a.date<b.date?-1:1; });
-    return out;
+    for(var k in grouped) grouped[k].sort(function(a,b){return a.date<b.date?-1:1;});
+    return grouped;
   }
 
   function load(){
-    document.getElementById("heroLoading").textContent = "Loading latest rate…";
-    document.getElementById("heroLoading").className = "loading";
-    var url = API + "?format=csv&startPeriod=" + isoDaysAgo(370) +
-              "&endPeriod=" + isoToday() + "&locale=en";
-    fetch(url, {cache:"no-store"})
+    var el=document.getElementById("heroLoading");
+    el.className="loading"; el.textContent="Loading latest rates…"; el.hidden=false;
+    document.getElementById("hero").hidden=true;
+    var url=API+"?format=csv&startPeriod="+isoDaysAgo(370)+"&endPeriod="+isoToday()+"&locale=en";
+    fetch(url,{cache:"no-store"})
       .then(function(res){ if(!res.ok) throw new Error("HTTP "+res.status); return res.text(); })
       .then(function(txt){
-        series = parseCSV(txt);
-        if(!series.length) throw new Error("No data returned");
+        store=parseCSV(txt);
+        if(!store[active]||!store[active].length) throw new Error("No data returned");
         render();
-        var now = new Date();
-        document.getElementById("updated").textContent =
-          " Last refreshed " + pad(now.getHours())+":"+pad(now.getMinutes())+".";
+        var now=new Date();
+        document.getElementById("updated").textContent=" Last refreshed "+pad(now.getHours())+":"+pad(now.getMinutes())+".";
       })
       .catch(function(e){
-        var el = document.getElementById("heroLoading");
-        el.className = "err";
-        el.textContent = "Couldn't load data ("+e.message+"). Check your connection and tap Refresh.";
+        var x=document.getElementById("heroLoading");
+        x.hidden=false; x.className="err";
+        x.textContent="Couldn't load data ("+e.message+"). Check your connection and tap Refresh.";
       });
   }
 
+  function buildTabs(){
+    var t=document.getElementById("tabs"); t.innerHTML="";
+    PAIRS.forEach(function(p){
+      var b=document.createElement("button");
+      b.textContent=p.label; b.setAttribute("data-code",p.code);
+      if(p.code===active) b.className="active";
+      t.appendChild(b);
+    });
+  }
+
   function render(){
-    var last = series[series.length-1];
-    var prev = series.length>1 ? series[series.length-2] : last;
-    var diff = last.value - prev.value;
-    var pct  = (diff/prev.value)*100;
+    var series=store[active]||[];
+    if(!series.length) return;
+    var last=series[series.length-1];
+    var prev=series.length>1?series[series.length-2]:last;
+    var diff=last.value-prev.value;
+    var pct=(diff/prev.value)*100;
 
-    document.getElementById("heroLoading").hidden = true;
-    document.getElementById("hero").hidden = false;
-    document.getElementById("asOf").textContent = "As of " + prettyDate(last.date);
-    document.getElementById("rate").textContent = fmt(last.value);
+    document.getElementById("heroLoading").hidden=true;
+    document.getElementById("hero").hidden=false;
+    document.getElementById("asOf").textContent="As of "+prettyDate(last.date);
+    document.getElementById("rate").textContent=fmt(last.value);
+    document.getElementById("unit").textContent=unitLabel(active);
 
-    var up = diff>=0;
-    var chip = document.getElementById("changeChip");
-    chip.className = "chip " + (up?"up":"down");
-    chip.textContent = (up?"▲ ":"▼ ") + fmt(Math.abs(diff)) + "  (" + (up?"+":"−") + Math.abs(pct).toFixed(2) + "%)";
-    document.getElementById("changeNote").textContent = "vs " + prettyDate(prev.date);
+    var up=diff>=0;
+    var chip=document.getElementById("changeChip");
+    chip.className="chip "+(up?"up":"down");
+    chip.textContent=(up?"▲ ":"▼ ")+fmt(Math.abs(diff))+"  ("+(up?"+":"−")+Math.abs(pct).toFixed(2)+"%)";
+    document.getElementById("changeNote").textContent="vs "+prettyDate(prev.date);
 
-    var year = series; // ~1y
-    var hi = Math.max.apply(null, year.map(function(d){return d.value;}));
-    var lo = Math.min.apply(null, year.map(function(d){return d.value;}));
-    document.getElementById("hi").textContent = fmt(hi);
-    document.getElementById("lo").textContent = fmt(lo);
-    var first = year[0].value;
-    var pchg = ((last.value-first)/first)*100;
-    var pe = document.getElementById("periodChg");
-    pe.textContent = (pchg>=0?"+":"−") + Math.abs(pchg).toFixed(2) + "%";
-    pe.className = "v " + (pchg>=0?"delta-up":"delta-down");
+    var vals=series.map(function(d){return d.value;});
+    document.getElementById("hi").textContent=fmt(Math.max.apply(null,vals));
+    document.getElementById("lo").textContent=fmt(Math.min.apply(null,vals));
+    var pchg=((last.value-series[0].value)/series[0].value)*100;
+    var pe=document.getElementById("periodChg");
+    pe.textContent=(pchg>=0?"+":"−")+Math.abs(pchg).toFixed(2)+"%";
+    pe.className="v "+(pchg>=0?"delta-up":"delta-down");
 
-    drawChart();
-    renderTable();
+    drawChart(); renderTable();
   }
 
   function visibleSeries(){
+    var series=store[active]||[];
     if(currentRange>=365) return series;
-    var cut = isoDaysAgo(currentRange);
-    return series.filter(function(d){ return d.date >= cut; });
+    var cut=isoDaysAgo(currentRange);
+    return series.filter(function(d){return d.date>=cut;});
   }
 
   function drawChart(){
-    var data = visibleSeries();
-    var cv = document.getElementById("chart");
-    var dpr = window.devicePixelRatio||1;
-    var W = cv.clientWidth, H = 240;
-    cv.width = W*dpr; cv.height = H*dpr;
-    var ctx = cv.getContext("2d");
-    ctx.setTransform(dpr,0,0,dpr,0,0);
-    ctx.clearRect(0,0,W,H);
+    var data=visibleSeries();
+    var cv=document.getElementById("chart");
+    var dpr=window.devicePixelRatio||1, W=cv.clientWidth, H=240;
+    cv.width=W*dpr; cv.height=H*dpr;
+    var ctx=cv.getContext("2d"); ctx.setTransform(dpr,0,0,dpr,0,0); ctx.clearRect(0,0,W,H);
     if(data.length<2) return;
-
-    var padL=44, padR=10, padT=14, padB=24;
-    var vals = data.map(function(d){return d.value;});
-    var mn = Math.min.apply(null,vals), mx = Math.max.apply(null,vals);
-    var range = (mx-mn)||1; mn-=range*0.08; mx+=range*0.08;
-    var plotW=W-padL-padR, plotH=H-padT-padB;
-    function X(i){ return padL + (i/(data.length-1))*plotW; }
-    function Y(v){ return padT + (1-(v-mn)/(mx-mn))*plotH; }
-
-    // gridlines + y labels
-    ctx.font="11px -apple-system,Segoe UI,Roboto,sans-serif";
-    ctx.textBaseline="middle";
-    for(var g=0; g<=4; g++){
-      var v = mn + (g/4)*(mx-mn);
-      var y = Y(v);
+    var padL=48,padR=10,padT=14,padB=24;
+    var vals=data.map(function(d){return d.value;});
+    var mn=Math.min.apply(null,vals),mx=Math.max.apply(null,vals);
+    var rng=(mx-mn)||1; mn-=rng*0.08; mx+=rng*0.08;
+    var plotW=W-padL-padR,plotH=H-padT-padB;
+    function X(i){return padL+(i/(data.length-1))*plotW;}
+    function Y(v){return padT+(1-(v-mn)/(mx-mn))*plotH;}
+    ctx.font="11px -apple-system,Segoe UI,Roboto,sans-serif"; ctx.textBaseline="middle";
+    for(var g=0;g<=4;g++){
+      var v=mn+(g/4)*(mx-mn),y=Y(v);
       ctx.strokeStyle="rgba(157,180,212,.15)"; ctx.lineWidth=1;
       ctx.beginPath(); ctx.moveTo(padL,y); ctx.lineTo(W-padR,y); ctx.stroke();
-      ctx.fillStyle="#9db4d4"; ctx.textAlign="right";
-      ctx.fillText(v.toFixed(2), padL-6, y);
+      ctx.fillStyle="#9db4d4"; ctx.textAlign="right"; ctx.fillText(v.toFixed(2),padL-6,y);
     }
-    // x labels (~4)
     ctx.textAlign="center"; ctx.textBaseline="top";
-    var months=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-    var ticks=4;
+    var m=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"],ticks=4;
     for(var t=0;t<=ticks;t++){
-      var idx=Math.round((t/ticks)*(data.length-1));
-      var p=data[idx].date.split("-");
-      ctx.fillStyle="#9db4d4";
-      ctx.fillText(months[parseInt(p[1],10)-1]+" '"+p[0].slice(2), X(idx), H-padB+6);
+      var idx=Math.round((t/ticks)*(data.length-1)),p=data[idx].date.split("-");
+      ctx.fillStyle="#9db4d4"; ctx.fillText(m[parseInt(p[1],10)-1]+" '"+p[0].slice(2),X(idx),H-padB+6);
     }
-    // area fill
     var grad=ctx.createLinearGradient(0,padT,0,padT+plotH);
-    grad.addColorStop(0,"rgba(77,163,255,.35)");
-    grad.addColorStop(1,"rgba(77,163,255,0)");
+    grad.addColorStop(0,"rgba(77,163,255,.35)"); grad.addColorStop(1,"rgba(77,163,255,0)");
     ctx.beginPath(); ctx.moveTo(X(0),Y(vals[0]));
     for(var i=1;i<data.length;i++) ctx.lineTo(X(i),Y(vals[i]));
     ctx.lineTo(X(data.length-1),padT+plotH); ctx.lineTo(X(0),padT+plotH); ctx.closePath();
     ctx.fillStyle=grad; ctx.fill();
-    // line
     ctx.beginPath(); ctx.moveTo(X(0),Y(vals[0]));
     for(var j=1;j<data.length;j++) ctx.lineTo(X(j),Y(vals[j]));
     ctx.strokeStyle="#4da3ff"; ctx.lineWidth=2; ctx.lineJoin="round"; ctx.stroke();
-    // last point
-    var lx=X(data.length-1), ly=Y(vals[vals.length-1]);
+    var lx=X(data.length-1),ly=Y(vals[vals.length-1]);
     ctx.beginPath(); ctx.arc(lx,ly,4,0,Math.PI*2); ctx.fillStyle="#eaf1fb"; ctx.fill();
     ctx.lineWidth=2; ctx.strokeStyle="#4da3ff"; ctx.stroke();
   }
 
   function renderTable(){
-    var tb = document.getElementById("tbody");
-    tb.innerHTML="";
-    var rows = series.slice(-12).reverse();
+    var series=store[active]||[];
+    var tb=document.getElementById("tbody"); tb.innerHTML="";
+    var rows=series.slice(-12).reverse();
     for(var i=0;i<rows.length;i++){
-      var d=rows[i];
-      var idx=series.indexOf(d);
-      var prev = idx>0 ? series[idx-1] : null;
-      var tr=document.createElement("tr");
-      var deltaCell="—", cls="";
-      if(prev){
-        var diff=d.value-prev.value;
-        cls = diff>=0?"delta-up":"delta-down";
-        deltaCell=(diff>=0?"+":"−")+fmt(Math.abs(diff));
-      }
-      tr.innerHTML="<td>"+prettyDate(d.date)+"</td><td>"+fmt(d.value)+
-                   "</td><td class='"+cls+"'>"+deltaCell+"</td>";
+      var d=rows[i],idx=series.indexOf(d),prev=idx>0?series[idx-1]:null;
+      var tr=document.createElement("tr"),deltaCell="—",cls="";
+      if(prev){ var diff=d.value-prev.value; cls=diff>=0?"delta-up":"delta-down"; deltaCell=(diff>=0?"+":"−")+fmt(Math.abs(diff)); }
+      tr.innerHTML="<td>"+prettyDate(d.date)+"</td><td>"+fmt(d.value)+"</td><td class='"+cls+"'>"+deltaCell+"</td>";
       tb.appendChild(tr);
     }
   }
 
-  document.getElementById("seg").addEventListener("click", function(e){
-    var b = e.target.closest("button"); if(!b) return;
-    currentRange = parseInt(b.getAttribute("data-range"),10);
-    var btns = this.querySelectorAll("button");
+  document.getElementById("tabs").addEventListener("click",function(e){
+    var b=e.target.closest("button"); if(!b) return;
+    active=b.getAttribute("data-code");
+    var btns=this.querySelectorAll("button");
     for(var i=0;i<btns.length;i++) btns[i].classList.remove("active");
     b.classList.add("active");
-    if(series.length) drawChart();
+    if(store[active]&&store[active].length) render();
   });
-  document.getElementById("refresh").addEventListener("click", load);
-  window.addEventListener("resize", function(){ if(series.length) drawChart(); });
+  document.getElementById("seg").addEventListener("click",function(e){
+    var b=e.target.closest("button"); if(!b) return;
+    currentRange=parseInt(b.getAttribute("data-range"),10);
+    var btns=this.querySelectorAll("button");
+    for(var i=0;i<btns.length;i++) btns[i].classList.remove("active");
+    b.classList.add("active");
+    if(store[active]&&store[active].length) drawChart();
+  });
+  document.getElementById("refresh").addEventListener("click",load);
+  window.addEventListener("resize",function(){ if(store[active]&&store[active].length) drawChart(); });
 
+  buildTabs();
   load();
 })();
 </script>
